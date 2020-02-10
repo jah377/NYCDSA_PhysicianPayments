@@ -1,0 +1,749 @@
+---
+title: "RShiny Top 20 Drug Analysis Code"
+author: "Jonathan Harris"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# ProPublica Top 50 Drug Dataset Analysis
+
+##Setup DataFrames for Plots and RShiny
+### Setup Program
+```{r, message=FALSE, warning=FALSE}
+
+#Clearout environment
+rm(list = ls(all.names = TRUE)) #will clear all objects includes hidden objects.
+gc()
+
+#Load Packages
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(RColorBrewer)
+library(broom)
+library(ggalt)
+
+#Download BBC Theme
+if(!require(pacman))install.packages("pacman")
+pacman::p_load('dplyr', 'tidyr', 'gapminder',
+               'ggplot2',  'ggalt',
+               'forcats', 'R.utils', 'png', 
+               'grid', 'ggpubr', 'scales',
+               'bbplot')
+devtools::install_github('bbc/bbplot')
+
+setwd("/Users/jonathanharris/Desktop/NYCDSA/projects/rshiny_proj")
+
+```
+
+### Import Data
+```{r data import}
+
+drug_df = read_csv("DataSets/ProPub_TopDrugs/doctor_drug_2016.csv")
+head(drug_df)
+
+```
+
+### ID Most Prescribed/Expensive Drugs
+```{r top drugs}
+
+#ID top 50 most prescribed/expensive drug and Isolate Drugs with Most Payments
+topdrugs = drug_df %>% filter(top50_claims == T &
+                                top50_cost == T) %>%
+  group_by(drug_name) %>%
+  summarise(tot = sum(d4d_payment_amount)) %>%
+  arrange(desc(tot)) %>% select(drug_name) %>% head(20)
+
+#Isolate drug_df
+drugs_interest = drug_df %>% filter(drug_name %in% unlist(topdrugs))
+
+#Import topdrug descriptions
+drugs_describe = read_csv("DataSets/ProPub_TopDrugs/drug_id.csv")
+
+#InnerJoin with drugs_interest
+drugs_interest = left_join(drugs_interest, drugs_describe, by = 'drug_name') %>% drop_na %>% mutate(drug_name = str_to_title(drug_name))
+rm(drug_df) #remove original dataframe for RAM
+
+head(drugs_interest)
+
+```
+
+### Prep Data for Shiny
+```{r rshiny data prep}
+
+#Prepare/export drug df for rshiny app
+rshiny_drugs = drugs_interest %>% select(-year ,
+                                         -top50_claims,
+                                         -top50_cost,
+                                         -generalist,
+                                         -total_claim_count_other,
+                                         -drug_id) %>%
+  rename(
+    'received_payments' = 'd4d_hasPayment',
+    'n_payments' = 'd4d_payment_number',
+    'tot_payments' = 'd4d_payment_amount',
+    'tot_meal_payments' = 'd4d_payment_amount_meals',
+    'tot_nonmeal_payments' = 'd4d_payment_amount_nmeals',
+    'tot_promo_payments' = 'd4d_payment_amount_ps',
+    'meet_claim_thresh' = 'partD_hasClaim',
+    'n_claims_drug' = 'partD_claim_count',
+    'tot_claim_drug' = 'partD_claim_cost',
+    'n_claims_alldrugs' = 'total_claim_count',
+    'tot_claims_alldrugs' = 'total_drug_cost',
+  ) %>%
+  mutate(payment_type = ifelse(
+    tot_payments == 0,
+    'NoPayments',
+    ifelse(
+      tot_meal_payments > 0 &
+        tot_nonmeal_payments == 0 & tot_promo_payments == 0,
+      'MealOnly',
+      ifelse(
+        tot_meal_payments == 0 &
+          tot_nonmeal_payments > 0 & tot_promo_payments == 0,
+        'NonMealOnly',
+        ifelse(
+          tot_meal_payments == 0 &
+            tot_nonmeal_payments == 0 &
+            tot_promo_payments > 0,
+          'PromoOnly',
+          'AllTypes'
+        )
+      )
+    )
+  ))
+
+write_delim(rshiny_drugs,
+            path = "NYCDSA_doctorpayments_jonharris_rshinyapp/rshiny_drugs.csv",
+            delim = ';',
+            col_names = T)
+
+#Prepare/export drug description df for rshiny app
+rshiny_drug_type = data.frame(cbind(drugs_interest$drug_name, drugs_interest$drug_id)) %>%
+  distinct() %>%
+  rename('drug_name' = 'X1', 'drug_type' = 'X2') %>%
+  mutate(drug_name = str_to_title(drug_name),
+         drug_type = str_to_title(drug_type))
+write_delim(
+  rshiny_drug_type,
+  path = "NYCDSA_doctorpayments_jonharris_rshinyapp/rshiny_drugtype.csv",
+  delim = ';',
+  col_names = T
+)
+
+rm(rshiny_drugs) #remove rshiny df for RAM
+
+```
+
+### Add Additional Preparation
+```{r additional prep}
+
+drugs_interest = drugs_interest %>% select(-year ,
+                                           -top50_claims,
+                                           -top50_cost,
+                                           -generalist,
+                                           -total_claim_count_other) %>%
+  rename(
+    'received_payments' = 'd4d_hasPayment',
+    'n_payments' = 'd4d_payment_number',
+    'tot_payments' = 'd4d_payment_amount',
+    'tot_meal_payments' = 'd4d_payment_amount_meals',
+    'tot_nonmeal_payments' = 'd4d_payment_amount_nmeals',
+    'tot_promo_payments' = 'd4d_payment_amount_ps',
+    'meet_claim_thresh' = 'partD_hasClaim',
+    'n_claims_drug' = 'partD_claim_count',
+    'tot_claim_drug' = 'partD_claim_cost',
+    'n_claims_alldrugs' = 'total_claim_count',
+    'tot_claims_alldrugs' = 'total_drug_cost',
+  ) %>%
+  mutate(payment_type = ifelse(
+    tot_payments == 0,
+    'NoPayments',
+    ifelse(
+      tot_meal_payments > 0 &
+        tot_nonmeal_payments == 0 & tot_promo_payments == 0,
+      'MealOnly',
+      'AllTypes'
+    )
+  )) %>%
+  mutate(payment_amt_group = ifelse(
+    tot_payments == 0,
+    'nopayment',
+    ifelse(
+      tot_payments > 0 & tot_payments < 100,
+      'bet_1_100',
+      ifelse(
+        tot_payments >= 100 & tot_payments < 500,
+        'bet_100_500',
+        ifelse(
+          tot_payments >= 500 & tot_payments < 10000,
+          'bet_500_1k',
+          ifelse(
+            tot_payments >= 1000 &
+              tot_payments < 5000,
+            'bet_1k_5k',
+            'great_5k'
+          )
+        )
+      )
+    )
+  )) %>% mutate(drug_name_long = str_to_title(paste(
+    paste(drug_name, drug_id, sep = ' ('), ')', sep = ''
+  ))) 
+
+```
+
+## Create Plots
+### Plot: Number of Physicians
+```{r ndoc_plot}
+
+#var = n docs per drug
+data = drugs_interest %>% group_by(drug_name) %>%
+  select(drug_name, npi)  %>%
+  summarise(var = n())
+
+ndoc_plot =
+  ggplot(data = data, aes(
+    x = reorder(drug_name, -var),
+    y = var,
+    fill = drug_name
+  )) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = ifelse(data$drug_name == 'Oxycontin', '#FAAB18' , '#1380A1')) +
+  bbc_style() +
+  labs(title = "Number of Prescribing Clinicians, By Drug",
+       subtitle = 'Large variation in number of prescribers',
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  scale_y_continuous(labels = scales::comma) +
+  geom_hline(yintercept = 0,
+             size = 1,
+             colour = "#333333") + coord_flip() +
+  geom_label(
+    aes(label = format(
+      round(var, 0), big.mark = ",", scientific = FALSE
+    )),
+    hjust = 1,
+    vjust = 0.5,
+    colour = "white",
+    fill = NA,
+    label.size = NA,
+    family = "Helvetica",
+    size = 3
+  ) +
+  theme(
+    panel.grid.major.x = element_line(color = "#cbcbcb"),
+    panel.grid.major.y = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'none',
+    plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  )
+
+#Save Plot
+ggsave(
+  'plots/topdrugs_ndocs.png',
+  plot = ndoc_plot,
+  units = "in",
+  height = 7,
+  width = 12,
+  dpi = 300
+)
+
+```
+
+### Plot: Average Number of Claims Per Physician by Drug
+```{r avgclaims_plot}
+
+#Var = mean claims per drug
+data = drugs_interest %>% group_by(drug_name)  %>%
+  summarise(var = mean(n_claims_drug))
+
+avgclaims_plot =  ggplot(data = data, aes(
+  x = reorder(drug_name, -var),
+  y = var,
+  fill = drug_name
+)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = ifelse(data$drug_name == 'Oxycontin', '#FAAB18' , '#1380A1')) +
+  bbc_style() +
+  labs(title = "Average Number of Claims Per Physician, By Drug",
+       subtitle = "Maintenance drugs among most prescribed",
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  scale_y_continuous(labels = scales::comma) +
+  geom_hline(yintercept = 0,
+             size = 1,
+             colour = "#333333") + coord_flip() +
+  geom_label(
+    aes(label = format(
+      round(var, 0), big.mark = ",", scientific = FALSE
+    )),
+    hjust = 1,
+    vjust = 0.5,
+    colour = "white",
+    fill = NA,
+    label.size = NA,
+    family = "Helvetica",
+    size = 3
+  ) +
+  theme(
+    panel.grid.major.x = element_line(color = "#cbcbcb"),
+    panel.grid.major.y = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'none',
+    plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  )
+
+ggsave(
+  'plots/topdrugs_avgclaims.png',
+  plot = avgclaims_plot,
+  units = "in",
+  height = 7,
+  width = 12,
+  dpi = 300
+)
+
+```
+
+### Plot: Percent of Physicians on Payroll by Drug
+```{r percpayroll_plot}
+
+#Var = % of doctors paid by drug companies
+data = drugs_interest %>% group_by(drug_name)  %>%
+  summarise(var = sum(received_payments) / n())
+
+percpayroll_plot =
+  ggplot(data = data, aes(
+    x = reorder(drug_name, -var),
+    y = var,
+    fill = drug_name
+  )) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = ifelse(data$drug_name == 'Oxycontin', '#FAAB18' , '#1380A1')) +
+  bbc_style() +
+  labs(title = "Percentage of Clinicians Receiving Payments",
+       subtitle = "Diabetes market hypercompetitive",
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 2)) +
+  geom_hline(yintercept = 0,
+             size = 1,
+             colour = "#333333") + coord_flip() +
+  geom_label(
+    aes(label = scales::percent(round(var, 2))),
+    hjust = 1,
+    vjust = 0.5,
+    colour = "white",
+    fill = NA,
+    label.size = NA,
+    family = "Helvetica",
+    size = 3
+  ) +
+  theme(
+    panel.grid.major.x = element_line(color = "#cbcbcb"),
+    panel.grid.major.y = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'none',
+    plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  )
+
+ggsave(
+  'plots/topdrugs_percpayroll.png',
+  plot = percpayroll_plot,
+  units = "in",
+  height = 7,
+  width = 12,
+  dpi = 300
+)
+
+```
+
+### Plot: Average Total Physician Payments by Drug
+```{r avgpayment_plot}
+
+#Var = average payment per physician
+data = drugs_interest %>% group_by(drug_name)  %>%
+  filter(received_payments == T) %>%
+  summarise(var = mean(tot_payments))
+
+avgpayment_plot = ggplot(data = data, aes(
+  x = reorder(drug_name, -var),
+  y = var,
+  fill = drug_name
+)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = ifelse(data$drug_name == 'Oxycontin', '#FAAB18' , '#1380A1')) +
+  bbc_style() +
+  labs(title = "Average Clinician Payment, By Drug",
+       subtitle = "Large discrepancy suggests different payment types",
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  scale_y_continuous(labels = dollar_format(prefix = "$")) +
+  geom_hline(yintercept = 0,
+             size = 1,
+             colour = "#333333") + coord_flip() +
+  geom_label(
+    aes(label = format(
+      round(var, 0), big.mark = ",", scientific = FALSE
+    )),
+    hjust = 1,
+    vjust = 0.5,
+    colour = "white",
+    fill = NA,
+    label.size = NA,
+    family = "Helvetica",
+    size = 3
+  ) +
+  theme(
+    panel.grid.major.x = element_line(color = "#cbcbcb"),
+    panel.grid.major.y = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'none',
+    plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  )
+
+ggsave(
+  'plots/topdrugs_avgpayment.png',
+  plot = avgpayment_plot,
+  units = "in",
+  height = 7,
+  width = 12,
+  dpi = 300
+)
+
+```
+
+### Plot: Average Total Physician Payment by Payment Type
+```{r paytype_plot}
+
+#Var =mean tot_payment per payment type
+paytype_plot = drugs_interest %>% filter(received_payments == T) %>%
+  select(drug_name,
+         tot_meal_payments,
+         tot_nonmeal_payments,
+         tot_promo_payments) %>%
+  rename(
+    'Meals' = 'tot_meal_payments',
+    'R&D/Consult/Travel' = 'tot_nonmeal_payments',
+    'Promo. Lec.' = 'tot_promo_payments'
+  ) %>%
+  gather(key = 'payment_kind', value = 'amount', -drug_name) %>%
+  group_by(payment_kind) %>%
+  summarise(var = mean(amount)) %>%
+  ggplot(data = ., aes(
+    x = reorder(payment_kind, -var),
+    y = var,
+    fill = payment_kind
+  )) +
+  geom_bar(stat = "identity", position = 'dodge') +
+  scale_fill_manual(values = c('#FAAB18' , '#1380A1', '#a13b0f')) +
+  bbc_style() +
+  scale_y_continuous(labels = dollar_format(prefix = "$")) +
+  labs(title = "Type of Clinician Payments Across Top 20 Drugs",
+       subtitle = "R&D/consult/travel and promotional lectures make up majority of payments",
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  geom_hline(yintercept = 0,
+             size = 1,
+             colour = "#333333") +
+  geom_label(
+    aes(label = format(
+      round(var, 0), big.mark = ",", scientific = FALSE
+    )),
+    hjust = .5,
+    vjust = 1,
+    colour = "white",
+    fill = NA,
+    label.size = NA,
+    family = "Helvetica",
+    size = 5
+  ) +
+  theme(
+    panel.grid.major.y = element_line(color = "#cbcbcb"),
+    panel.grid.major.x = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'none',
+    plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  ) + ylim(0, 300) +
+  scale_colour_manual(
+    labels = function(x)
+      paste0(" ", x, "  ")
+  )
+
+ggsave(
+  'plots/topdrugs_paymenttype.png',
+  plot = paytype_plot,
+  units = "in",
+  height = 7,
+  width = 12,
+  dpi = 300
+)
+
+```
+
+### Plot: Claims Per Payment
+```{r claimspayment_plot}
+
+#Organize Data
+drug_data = drugs_interest %>% group_by(drug_name, payment_type) %>%
+  select(drug_name, payment_type, n_claims_drug) %>%
+  summarise(var = mean(n_claims_drug)) %>%
+  spread(payment_type, var)
+
+#Plot Data
+claimspayment_plot = ggplot() +
+  geom_segment(
+    data = drug_data %>% mutate(
+      start = NoPayments,
+      end = ifelse(AllTypes > MealOnly, AllTypes, MealOnly)
+    ),
+    aes(
+      x = start,
+      xend = end,
+      y = reorder(drug_name, (start - end)),
+      yend = reorder(drug_name, (start - end))
+    ),
+    color = "#c9c4c2",
+    size = 2
+  ) +
+  geom_point(
+    data = drug_data %>% mutate(gap = ifelse(AllTypes > MealOnly, AllTypes, MealOnly) - NoPayments) %>%
+      gather(payment_type, claims, AllTypes, MealOnly, NoPayments),
+    aes(claims, reorder(drug_name, gap), color = payment_type),
+    size = 4
+  ) +
+  scale_fill_manual(values = c('#FAAB18' , '#1380A1', '#a13b0f')) +
+  bbc_style() +
+  labs(title = "Average Clinician Rx Claim per Payment Type, By Drug",
+       subtitle = "Notable differences between payment types",
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  theme(
+    panel.grid.major.y = element_line(color = "#cbcbcb"),
+    panel.grid.major.x = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'right',
+    plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  )
+
+ggsave(
+  'plots/topdrugs_claimspayment.png',
+  plot = claimspayment_plot,
+  units = "in",
+  height = 7,
+  width = 12,
+  dpi = 300
+)
+
+
+```
+
+### Plot: Effect of Payment Amount
+```{r paymentamt_group_plot}
+
+paygroups_plot = drugs_interest %>% group_by(payment_amt_group) %>%
+  summarise(var = mean(n_claims_drug)) %>%
+  ggplot(data = ., aes(x=reorder(payment_amt_group,var), var, fill = payment_amt_group)) +
+  geom_bar(stat = 'identity', position = 'dodge') +
+  scale_fill_manual(values = c('#dddddd', '#faab18', '#1380a1', '#601dfa', '#fa5b18')) +
+  bbc_style() +
+  labs(title = "Average Rx Claims Per Clinician, By Payment Group",
+       subtitle = "Higher payments results in more prescriptions",
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  geom_hline(yintercept = 0,
+             size = 1,
+             colour = "#333333") +
+  geom_label(
+    aes(label = format(
+      round(var, 0), big.mark = ",", scientific = FALSE
+    )),
+    hjust = .5,
+    vjust = 1,
+    colour = "white",
+    fill = NA,
+    label.size = NA,
+    family = "Helvetica",
+    size = 6
+  ) +
+  theme(
+    panel.grid.major.y = element_line(color = "#cbcbcb"),
+    panel.grid.major.x = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'none',
+        plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  ) +
+  scale_x_discrete(labels = c('$0', '$0< X <$100', '$100=< X <$500', '$500=< X <$1,000', 'X > $5,000'))
+
+ggsave(
+  'plots/topdrugs_paygroups.png',
+  plot = paygroups_plot,
+  units = "in",
+  height = 7,
+  width = 12,
+  dpi = 300
+)
+  
+```
+
+### Plot: Effect of Payment Amount on OXYCONTIN
+```{r claimspayment_oxycontin_plot}
+
+oxycontin_paygroups_plot = drugs_interest %>% filter(drug_name == 'Oxycontin') %>% group_by(payment_amt_group) %>%
+  summarise(var = mean(n_claims_drug)) %>%
+  ggplot(data = ., aes(x=reorder(payment_amt_group,var), var, fill = payment_amt_group)) +
+  geom_bar(stat = 'identity', position = 'dodge') +
+  scale_fill_manual(values = c('#dddddd', '#faab18', '#1380a1', '#601dfa', '#fa5b18')) +
+  bbc_style() +
+  labs(title = "Oxycontin: Average Rx Claims Per Clinician, By Payment Group",
+       subtitle = "Higher payments results in more prescriptions",
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  geom_hline(yintercept = 0,
+             size = 1,
+             colour = "#333333") +
+  geom_label(
+    aes(label = format(
+      round(var, 0), big.mark = ",", scientific = FALSE
+    )),
+    hjust = .5,
+    vjust = 1,
+    colour = "white",
+    fill = NA,
+    label.size = NA,
+    family = "Helvetica",
+    size = 6
+  ) +
+  theme(
+    panel.grid.major.y = element_line(color = "#cbcbcb"),
+    panel.grid.major.x = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'none',
+        plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  ) +
+  scale_x_discrete(labels = c('$0', '$0< X <$100', '$100=< X <$500', '$500=< X <$1,000', 'X > $5,000'))
+
+ggsave(
+  'plots/topdrugs_paygroups_OXYCONTIN.png',
+  plot = oxycontin_paygroups_plot,
+  units = "in",
+  height = 7,
+  width = 12,
+  dpi = 300
+)
+  
+```
+
+### Plot: Payment Amount and Profit
+```{r paymentamt_profit_plot}  
+
+profits_plot = drugs_interest %>% mutate(payment_amt_group = factor(
+  payment_amt_group,
+  levels = c(
+    "great_5k",
+    "bet_500_1k",
+    "bet_100_500",
+    "bet_1_100",
+    "nopayment"
+  )
+)) %>%
+  filter(received_payments == T) %>%
+  group_by(drug_name, payment_amt_group) %>%
+  mutate(profit =  tot_claim_drug - tot_payments) %>%
+  select(drug_name, payment_amt_group, profit) %>%
+  summarise(var = sum(profit > 0) / n()) %>%
+  ggplot(data = ., aes(payment_amt_group, y = var, fill = payment_amt_group)) +
+  geom_bar(stat = 'identity', position = 'dodge') +
+  facet_wrap( ~ drug_name) +
+  scale_fill_manual(values = c('#faab18', '#1380a1', '#601dfa', '#fa5b18')) +
+  scale_x_discrete(
+    labels = c(
+      "bet_1_100" = "$0< X <$100",
+      "bet_100_500" = '$100=< X <$500',
+      "bet_500_1k" = '$500=< X <$1,000',
+      'great_5k' = 'X > $5,000'
+    )
+  ) +
+  bbc_style() +
+  labs(title = "Clinician Payment Profitability Per Amount Group, By Drug",
+       subtitle = "... like shooting fish in a barrel",
+       caption = "Data source: 2016 Top 50 Drugs, propublica.org") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 2)) +
+  geom_hline(yintercept = 0,
+             size = 1,
+             colour = "#333333") + coord_flip() +
+  geom_label(
+    aes(label = scales::percent(round(var, 2))),
+    hjust = 1,
+    vjust = 0.5,
+    colour = "white",
+    fill = NA,
+    label.size = NA,
+    family = "Helvetica",
+    size = 3
+  ) +
+  theme(
+    text = element_text(size = 12),
+    panel.grid.major.x = element_line(color = "#cbcbcb"),
+    panel.grid.major.y = element_blank(),
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    legend.position = 'none',
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.title.y = element_blank(),
+        plot.title = element_text(size = 24),
+    plot.subtitle = element_text(size = 16, face = "italic"),
+    plot.caption = element_text(size = 6, hjust = 1)
+  )
+
+ggsave(
+  'plots/topdrugs_profits.png',
+  plot = profits_plot,
+  units = "in",
+  height = 10,
+  width = 14,
+  dpi = 300
+)
+
+```
+
+##S Statistical Analyses
+### Linear Modeling
+```{r linear model}
+
+# drugs_lm = drugs_interest %>% group_by(drug_name) %>% do(tidy(lm(partD_claim_count ~ d4d_hasPayment, data=.))) %>% ungroup()
+# summary(drugs_lm)
+# drugs_lm
+
+# # covars, used in all models
+# covars <- c("total_claim_count_other", "generalist")
+# 
+# # model 1:
+# model1 <- as.formula(paste("partD_claim_count ~ d4d_hasPayment + ", paste(covars, collapse= "+")))
+# 
+# model1DF <- DOC_DRUG %>% 
+#   # limit to people who prescribed the drug
+#   filter(is.na(partD_claim_count)==F & is.na(d4d_hasPayment)==F & partD_claim_count>=11)
+# 
+# lm1 <- model1DF %>% 
+#   group_by(drug_name) %>% 
+#   # Run separate regressions for each drug. 
+#   do(tidy(lm(model1, data=.))) %>% 
+#   ungroup()
+
+
+```
+
+
