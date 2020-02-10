@@ -718,32 +718,3 @@ ggsave(
 )
 
 ```
-
-##S Statistical Analyses
-### Linear Modeling
-```{r linear model}
-
-# drugs_lm = drugs_interest %>% group_by(drug_name) %>% do(tidy(lm(partD_claim_count ~ d4d_hasPayment, data=.))) %>% ungroup()
-# summary(drugs_lm)
-# drugs_lm
-
-# # covars, used in all models
-# covars <- c("total_claim_count_other", "generalist")
-# 
-# # model 1:
-# model1 <- as.formula(paste("partD_claim_count ~ d4d_hasPayment + ", paste(covars, collapse= "+")))
-# 
-# model1DF <- DOC_DRUG %>% 
-#   # limit to people who prescribed the drug
-#   filter(is.na(partD_claim_count)==F & is.na(d4d_hasPayment)==F & partD_claim_count>=11)
-# 
-# lm1 <- model1DF %>% 
-#   group_by(drug_name) %>% 
-#   # Run separate regressions for each drug. 
-#   do(tidy(lm(model1, data=.))) %>% 
-#   ungroup()
-
-
-```
-
-
